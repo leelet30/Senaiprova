@@ -1,0 +1,27 @@
+async function buscarDoBanco() {
+    const resposta = await fetch("http://localhost:8080/produtos");
+    const produtos = await resposta.json();
+
+    const lista = document.getElementById("lista-produtos");
+    lista.innerHTML = "";
+
+    produtos.forEach(nomeProduto => {
+        lista.innerHTML += `<li>${nomeProduto}</li>`;
+    });
+}
+
+async function salvarNoBanco() {
+    const input = document.getElementById("campo-nome");
+    const textoDigitado = input.value;
+
+    const objetoProduto = { nome: textoDigitado };
+
+    await fetch("http://localhost:8080/produtos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(objetoProduto)
+    });
+
+    input.value = "";
+    buscarDoBanco();
+}
