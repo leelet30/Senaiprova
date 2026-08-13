@@ -1,0 +1,143 @@
+// ============================================================================
+// IMPORTS: Importação de bibliotecas para ter acesso às ferramentas do Java
+// ============================================================================
+import com.sun.net.httpserver.HttpServer;   // Cria o servidor HTTP
+import com.sun.net.httpserver.HttpHandler;  // Manipulador de requisições (não usou direto, mas veio junto)
+import com.sun.net.httpserver.HttpExchange; // Representa a troca de dados (Requisição x Resposta)
+import com.google.gson.Gson;               // Converte Objeto Java <-> Texto JSON
+import java.io.*;                          // Leitura e escrita de dados (Streams)
+import java.net.InetSocketAddress;         // Define IP e Porta onde o servidor roda
+import java.sql.*;                         // Tudo relacionado a Banco de Dados (JDBC)
+import java.util.ArrayList;                // Estrutura de dados para criar listas dinâmicas
+import java.util.List;                     // Interface de lista
+
+public class ServidorApp {
+
+    // throws Exception evita ter que colocar blocos try/catch para tratar erros de IO/SQL aqui
+    public static void main(String[] args) throws Exception {
+
+        // ====================================================================
+        // 1. BANCO DE DADOS (SQLite)
+        // ====================================================================
+        
+        // Abre conexão com o banco "meubanco.db". Se o arquivo não existir, ele cria sozinho.
+        Connection conexao = DriverManager.getConnection("jdbc:sqlite:meubanco.db");
+
+        // Cria um objeto 'stmt' para podermos enviar comandos em SQL para o banco
+        Statement stmt = conexao.createStatement();
+
+        // Executa o SQL que cria a tabela "produtos" caso ela ainda não exista no arquivo
+        // id: chave primária com autoincremento (1, 2, 3...)
+        // nome: texto com o nome do produto
+        stmt.execute("CREATE TABLE IF NOT EXISTS produtos (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT)");
+
+        // ====================================================================
+        // 2. CRIAÇÃO DO SERVIDOR HTTP
+        // ====================================================================
+
+        // Cria o servidor escutando na porta 8080 (0 = tamanho padrão da fila de conexões)
+        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+
+        // Define a rota "/produtos". Sempre que alguém acessar http://localhost:8080/produtos,
+        // o código dentro da Arrow Function (exchange -> { ... }) será executado.
+        server.createContext("/produtos", exchange -> {
+
+            // ----------------------------------------------------------------
+            // CONFIGURAÇÃO DE CORS (Avisos de permissão para o Navegador)
+            // ----------------------------------------------------------------
+            // Permite que qualquer site (*) faça chamadas para essa API
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            
+            // Define os métodos HTTP aceitos nesta rota
+            exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            
+            // Aceita requisições enviando dados no formato 'Content-Type' (como JSON)
+            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+
+            // Se o navegador enviar uma checagem prévia (método OPTIONS), apenas responde OK (204) e encerra.
+            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1); // 204 = No Content (Sucesso sem corpo)
+                return; // Para a execução do código aqui
+            }
+
+            // Instancia o manipulador de JSON
+            Gson gson = new Gson();
+
+            // ----------------------------------------------------------------
+            // ROTA GET: BUSCAR E LISTAR PRODUTOS
+            // ----------------------------------------------------------------
+            if ("GET".equals(exchange.getRequestMethod())) {
+                
+                // Cria uma lista vazia de textos para guardar os nomes vindos do banco
+                List<String> lista = new ArrayList<>();
+
+                // Executa a busca SQL no banco e guarda a tabela de resultados em 'rs'
+                ResultSet rs = stmt.executeQuery("SELECT nome FROM produtos");
+
+                // Percorre linha por linha do resultado enquanto houver registros
+                while (rs.next()) {
+                    // Pega o valor da coluna "nome" e adiciona na lista Java
+                    lista.add(rs.getString("nome"));
+                }
+                
+                // Transforma a lista Java em um texto no formato JSON (Ex: ["Arroz", "Feijão"])
+                String jsonResposta = gson.toJson(lista);
+
+                // Converte o texto JSON em um array de bytes para poder enviar na rede
+                byte[] bytes = jsonResposta.getBytes();
+                
+                // Envia o cabeçalho HTTP: Status 200 (OK) + Tamanho do conteúdo em bytes
+                exchange.sendResponseHeaders(200, bytes.length);
+
+                // Abre o fluxo de saída para enviar os dados para o cliente
+                OutputStream os = exchange.getResponseBody();
+                os.write(bytes); // Escreve os bytes no corpo da resposta
+                os.close();      // Fecha o fluxo enviando tudo
+
+            // ----------------------------------------------------------------
+            // ROTA POST: CADASTRAR NOVO PRODUTO
+            // ----------------------------------------------------------------
+            } else if ("POST".equals(exchange.getRequestMethod())) {
+
+                // Lê o corpo da requisição que veio do cliente em formato JSON
+                InputStreamReader reader = new InputStreamReader(exchange.getRequestBody());
+
+                // Converte o JSON recebido diretamente para um objeto da classe 'Produto'
+                Produto produtoRecebido = gson.fromJson(reader, Produto.class);
+
+                // Prepara a consulta SQL com '?' para evitar ataques de SQL Injection (Segurança!)
+                PreparedStatement ps = conexao.prepareStatement("INSERT INTO produtos (nome) VALUES (?)");
+
+                // Substitui a 1ª interrogação pelo nome contido no objeto 'produtoRecebido'
+                ps.setString(1, produtoRecebido.nome);
+
+                // Executa o comando de inserção no banco de dados
+                ps.executeUpdate();
+
+                // Mensagem de confirmação para devolver ao cliente
+                String resposta = "Salvo com sucesso!";
+
+                // Envia o cabeçalho HTTP: Status 201 (Created/Criado) + Tamanho da mensagem
+                exchange.sendResponseHeaders(201, resposta.length());
+
+                // Escreve a resposta e fecha a conexão
+                OutputStream os = exchange.getResponseBody();
+                os.write(resposta.getBytes());
+                os.close();
+            }
+        });
+
+        // Liga o servidor de fato para começar a escutar as requisições
+        server.start();
+
+        // Imprime no console avisando que está funcionando
+        System.out.println("Servidor rodando na porta 8080...");
+    }
+}
+
+// ============================================================================
+// CLASSE MODELO (DTO): Usada pelo Gson para mapear a estrutura do JSON
+// ============================================================================
+class Produto {
+    String nome; // O nome da variável deve bater com a chave do JSON (ex: {"nome": "Teclado"})
+}
