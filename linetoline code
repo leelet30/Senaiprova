@@ -1,0 +1,141 @@
+// ==========================================
+// IMPORTAÇÕES DE BIBLIOTECAS (Pacotes necessários)
+// ==========================================
+import com.sun.net.httpserver.HttpServer;     // Cria o servidor HTTP no Java
+import com.sun.net.httpserver.HttpHandler;    // Interface para manipular requisições
+import com.sun.net.httpserver.HttpExchange;   // Representa a troca de dados (envio/resposta)
+import com.google.gson.Gson;                  // Biblioteca do Google para converter Objetos Java <-> JSON
+import java.io.*;                             // Usado para ler e escrever dados (Input/Output)
+import java.net.InetSocketAddress;            // Define a porta e o endereço onde o servidor vai rodar
+import java.sql.*;                            // Recursos do Java para conectar e operar Banco de Dados (SQL)
+import java.util.ArrayList;                   // Estrutura de lista dinâmica
+import java.util.List;                        // Interface de lista
+
+// Classe principal que roda a aplicação
+public class ServidorApp {
+    
+    // Método principal que inicia o programa
+    public static void main(String[] args) throws Exception {
+        
+        // ==========================================
+        // CONEXÃO E CRIAÇÃO DO BANCO DE DADOS (SQLite)
+        // ==========================================
+        
+        // Conecta ao arquivo de banco de dados chamado "meubanco.db" (se não existir, cria um)
+        Connection conexao = DriverManager.getConnection("jdbc:sqlite:meubanco.db");
+        
+        // Cria um objeto para enviar comandos SQL para o banco
+        Statement stmt = conexao.createStatement();
+        
+        // Executa o comando SQL que cria a tabela "produtos" caso ela ainda não exista
+        stmt.execute("CREATE TABLE IF NOT EXISTS produtos (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT)");
+
+        // ==========================================
+        // INICIALIZAÇÃO DO SERVIDOR HTTP
+        // ==========================================
+        
+        // Cria o servidor Web escutando requisições na porta 8080 (http://localhost:8080)
+        HttpServer server = HttpServer.create(new InetSocketAddress(8080), 0);
+        
+        // Mapeia a rota "/produtos". Qualquer requisição para http://localhost:8080/produtos entra nesse bloco
+        server.createContext("/produtos", exchange -> {
+            
+            // --------------------------------------------------
+            // CABEÇALHOS CORS (Permite que o Frontend em JS converse com o Backend em Java)
+            // --------------------------------------------------
+            // Permite acesso de qualquer origem (qualquer página frontend)
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            // Informa quais métodos HTTP são permitidos nessa API
+            exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+            // Informa que aceita o cabeçalho "Content-Type"
+            exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type");
+
+            // O navegador manda uma requisição "OPTIONS" antes do POST para testar a conexão.
+            // Se for "OPTIONS", o servidor responde apenas um OK (código 204) e encerra.
+            if ("OPTIONS".equals(exchange.getRequestMethod())) {
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+
+            // Instância da biblioteca Gson para trabalhar com conversão de JSON
+            Gson gson = new Gson();
+
+            // ==========================================
+            // OPERAÇÃO 1: READ / RECOVERY (MÉTODO GET)
+            // Busca os dados no Banco e envia para o Frontend
+            // ==========================================
+            if ("GET".equals(exchange.getRequestMethod())) {
+                
+                // Cria uma lista de textos vazia para guardar os nomes dos produtos
+                List<String> lista = new ArrayList<>();
+                
+                // Executa a busca SQL no banco selecionando apenas os nomes dos produtos
+                ResultSet rs = stmt.executeQuery("SELECT nome FROM produtos");
+                
+                // 'while' percorre todas as linhas retornadas pelo Banco de Dados
+                while (rs.next()) {
+                    // Adiciona o valor da coluna "nome" dentro da nossa lista Java
+                    lista.add(rs.getString("nome"));
+                }
+                
+                // Converte a lista do Java (ex: ["Arroz", "Feijão"]) para texto no formato JSON
+                String jsonResposta = gson.toJson(lista);
+                
+                // Converte o texto JSON em um array de bytes para ser enviado pela rede
+                byte[] bytes = jsonResposta.getBytes();
+                
+                // Envia o cabeçalho HTTP com status 200 (OK/Sucesso) e o tamanho dos dados
+                exchange.sendResponseHeaders(200, bytes.length);
+                
+                // Abre o fluxo de saída para enviar a resposta ao cliente (Frontend)
+                OutputStream os = exchange.getResponseBody();
+                os.write(bytes); // Escreve os bytes da resposta
+                os.close();      // Fecha a conexão
+
+            // ==========================================
+            // OPERAÇÃO 2: CREATE (MÉTODO POST)
+            // Recebe um dado do Frontend e salva no Banco
+            // ==========================================
+            } else if ("POST".equals(exchange.getRequestMethod())) {
+                
+                // Lê o corpo da requisição enviada pelo JavaScript (o JSON com o nome do produto)
+                InputStreamReader reader = new InputStreamReader(exchange.getRequestBody());
+                
+                // Converte o JSON recebido diretamente para um Objeto do tipo 'Produto' em Java
+                Produto produtoRecebido = gson.fromJson(reader, Produto.class);
+
+                // Prepara o comando SQL de inserção usando 'PreparedStatement' (evita falhas de segurança)
+                PreparedStatement ps = conexao.prepareStatement("INSERT INTO produtos (nome) VALUES (?)");
+                
+                // Substitui a interrogação (?) pelo nome contido no objeto 'produtoRecebido'
+                ps.setString(1, produtoRecebido.nome);
+                
+                // Executa a inserção do novo registro dentro do Banco de Dados
+                ps.executeUpdate();
+
+                // Define uma mensagem textual de confirmação
+                String resposta = "Salvo com sucesso!";
+                
+                // Envia o cabeçalho HTTP com status 201 (Created/Criado)
+                exchange.sendResponseHeaders(201, resposta.length());
+                
+                // Envia a mensagem de confirmação para o Frontend
+                OutputStream os = exchange.getResponseBody();
+                os.write(resposta.getBytes());
+                os.close(); // Fecha a conexão
+            }
+        });
+
+        // Liga o servidor para começar a escutar as conexões
+        server.start();
+        System.out.println("Servidor rodando na porta 8080...");
+    }
+}
+
+// ==========================================
+// CLASSE MODELO (Representa o Produto)
+// ==========================================
+// Mapeia o JSON retornado pelo Frontend (ex: {"nome": "Teclado"}) para uma variável Java
+class Produto {
+    String nome; // Atributo que armazena o nome do produto
+}
